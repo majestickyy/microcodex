@@ -75,6 +75,28 @@ rejected with an error. The value is sent to the API as the request's
 > complete security boundary: commands that do not match the denylist and all
 > file operations run with the same permissions as the MicroCodex process.
 
+### Delegating to a sub-agent
+
+The agent can hand a self-contained task to a fresh sub-agent through the
+`task` tool, and the sub-agent's answer is returned to the calling turn as the
+tool's output. This is useful for work that is independent of the current
+conversation, such as surveying a directory or checking an unrelated subsystem,
+without spending the parent turn's context on it.
+
+```shell
+microcodex "Use a sub-agent to inventory the tests directory, then summarise what is covered"
+```
+
+The sub-agent reuses your credentials, endpoint, model and reasoning effort, and
+gets the same filesystem tools, but it starts a separate conversation and does
+**not** receive the `task` tool itself, so a delegated task cannot fan out into
+further delegation. Its result comes back verbatim, so ask for the output format
+you want in the task prompt.
+
+A delegation is bounded by a timeout (600s by default). Exceeding it, or a
+sub-agent error, is reported to the parent turn as a tool error rather than
+aborting the turn.
+
 ### Using Codex skills
 
 MicroCodex discovers the same filesystem skills installed for Codex under

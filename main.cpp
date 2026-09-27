@@ -6,6 +6,7 @@
 #include "model-catalog.h"
 #include "oauth.h"
 #include "response-item.h"
+#include "system-prompt.h"
 #include "ui.h"
 
 #include <chrono>
@@ -330,6 +331,38 @@ namespace {
         return 0;
     }
 
+    // Builds the runner behind the "task" tool. The sub-agent reuses the
+    // parent's credentials, endpoint, model and effort, but gets its own
+    // conversation and a tool set without "task" itself, so a delegated task
+    // can never fan out into unbounded nesting.
+    microcodex::SubAgentOptions makeSubAgentOptions(const microcodex::CodexApiConfig &parent) {
+        microcodex::SubAgentOptions options;
+        microcodex::CodexApiConfig child = parent;
+        child.tools = microcodex::makeCodingTools();
+        child.persist_conversation = false;
+        child.resume_conversation.reset();
+        // A sub-agent shares the filesystem but must not write the parent's
+        // transcript; a fresh file per run keeps a failed delegation readable.
+        child.instructions = std::string(microcodex::codingAgentSystemPrompt());
+        child.instructions +=
+            "\nYou are a sub-agent. Complete exactly the task you were given, then stop. "
+            "Do not delegate further, and do not ask questions: report what you found, "
+            "including failures, in your final message.\n";
+
+        options.runner = [child](std::string_view task, std::string_view description) -> std::string {
+            (void)description;
+            microcodex::CodexApi subagent{child};
+            auto response = subagent.sendUserMessage(task);
+            if (!response) {
+                // Surfaced to the parent as a tool error rather than an
+                // exception, so one bad delegation cannot abort the turn.
+                throw std::runtime_error(response.error());
+            }
+            return response->text;
+        };
+        return options;
+    }
+
     std::expected<void, std::string> applySizeEnvironment(const char *name, std::size_t &destination) {
         const char *text = std::getenv(name);
         if (text == nullptr || text[0] == '\0') return {};
@@ -467,6 +500,9 @@ int main(const int argc, char *argv[]) {
         std::cerr << configured.error() << '\n';
         return 1;
     }
+    // Delegation is offered last so it inherits the fully resolved config
+    // (endpoint, credentials, effort, model) and the sub-agent matches it.
+    config.tools = microcodex::makeCodingTools(makeSubAgentOptions(config));
     if (request->prompt) {
         return runPrompt(std::move(config), *request->prompt);
     }

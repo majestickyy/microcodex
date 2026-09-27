@@ -196,6 +196,42 @@ def validate_scenario!(scenario, request_number, payload)
                "Error: command denied: forced file removal is blocked",
              "dangerous shell command was not rejected by the denylist")
     end
+  when "task-delegation"
+    # validate_coding_tools! is deliberately not called on the sub-agent turn:
+    # the sub-agent legitimately has a smaller tool set (no "task"), which is
+    # exactly the nesting guard under test.
+    if request_number.zero?
+      validate_coding_tools!(payload)
+      assert(input_text(payload) == "Delegate an inventory task",
+             "delegation scenario did not receive the user prompt")
+    elsif request_number == 1
+      assert(input_text(payload) == "Count the files in the project.",
+             "sub-agent did not receive the delegated task prompt")
+      assert(!payload.fetch("tools").map { |tool| tool["name"] }.include?("task"),
+             "sub-agent must not be able to delegate further")
+    else
+      validate_coding_tools!(payload)
+      output = payload.fetch("input").find do |item|
+        item["type"] == "function_call_output" && item["call_id"] == "call_task"
+      end
+      assert(output, "parent turn did not receive the sub-agent output")
+      assert(output.fetch("output") == "Sub-agent found 3 files",
+             "parent did not receive the sub-agent's result verbatim")
+    end
+  when "task-empty"
+    validate_coding_tools!(payload)
+    if request_number.zero?
+      assert(input_text(payload) == "Delegate an empty task",
+             "empty-task scenario did not receive the prompt")
+    else
+      output = payload.fetch("input").find do |item|
+        item["type"] == "function_call_output" && item["call_id"] == "call_task"
+      end
+      assert(output, "empty-task turn did not contain a tool output")
+      assert(output.fetch("output") ==
+               "Error: Argument 'task' must not be empty",
+             "an empty delegation was not rejected before spawning a sub-agent")
+    end
   when "incomplete-output"
     validate_coding_tools!(payload)
     if request_number.zero?
@@ -439,6 +475,25 @@ def round_limit_call_response(request_number)
   )
 end
 
+def subagent_call_response
+  sse(
+    {type: "response.output_item.done",
+     item: {type: "function_call", call_id: "call_task", name: "task",
+            arguments: JSON.generate(task: "Count the files in the project.",
+                                      description: "inventory")}},
+    completed
+  )
+end
+
+def empty_task_call_response
+  sse(
+    {type: "response.output_item.done",
+     item: {type: "function_call", call_id: "call_task", name: "task",
+            arguments: JSON.generate(task: "")}},
+    completed
+  )
+end
+
 def response_for(scenario, request_number)
   case scenario
   when "text" then [200, "OK", "text/event-stream", text_response]
@@ -480,6 +535,15 @@ def response_for(scenario, request_number)
   when "tool-bash-denied"
     [200, "OK", "text/event-stream",
      request_number.zero? ? denied_bash_call_response : message_response("Dangerous command blocked")]
+  when "task-delegation"
+    case request_number
+    when 0 then [200, "OK", "text/event-stream", subagent_call_response]
+    when 1 then [200, "OK", "text/event-stream", message_response("Sub-agent found 3 files")]
+    else [200, "OK", "text/event-stream", message_response("Delegation complete")]
+    end
+  when "task-empty"
+    body = request_number.zero? ? empty_task_call_response : message_response("Rejected empty task")
+    [200, "OK", "text/event-stream", body]
   when "incomplete-output"
     body = request_number.zero? ? incomplete_response("Partial limited answer") :
                                   message_response("Continued limited answer")
@@ -580,6 +644,13 @@ expected_requests = if scenario == "context-error-retry"
                     elsif scenario == "tool-round-limit"
                       TOOL_ROUND_LIMIT + 2
                     elsif %w[tool-write tool-edit tool-shell-env tool-bash-denied compaction-resume incomplete-output interrupt-output interrupt-tool].include?(scenario)
+                      2
+                    elsif scenario == "task-delegation"
+                      # parent turn -> sub-agent turn -> parent turn
+                      3
+                    elsif scenario == "task-empty"
+                      # parent turn -> parent turn (rejected before any sub-agent
+                      # request, so two responses is still enough)
                       2
                     else
                       1
