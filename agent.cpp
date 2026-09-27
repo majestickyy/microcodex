@@ -9,6 +9,7 @@
 #include "json.h"
 #include "read.h"
 #include "skills.h"
+#include "subagent.h"
 #include "system-prompt.h"
 #include "write.h"
 
@@ -120,6 +121,10 @@ namespace {
 namespace microcodex {
 
     std::vector<std::shared_ptr<const ToolBase>> makeCodingTools() {
+        return makeCodingTools(microcodex::SubAgentOptions{});
+    }
+
+    std::vector<std::shared_ptr<const ToolBase>> makeCodingTools(microcodex::SubAgentOptions subagent) {
         std::vector<std::shared_ptr<const ToolBase>> tools;
         tools.emplace_back(std::make_shared<ReadTool>(
             "read", "Read up to limit bytes from a file starting at offset.", read,
@@ -142,6 +147,11 @@ namespace microcodex {
             static_cast<std::expected<BashCommandResult, std::string> (*)(const std::string &, std::stop_token)>(bash),
             R"({"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false})",
             executeBash));
+        // Only advertised when a runner was supplied. Without one the tool
+        // would always fail at call time, which is worse than not offering it.
+        if (subagent.runner) {
+            tools.emplace_back(microcodex::makeSubAgentTool(std::move(subagent)));
+        }
         return tools;
     }
 

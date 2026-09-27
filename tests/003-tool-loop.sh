@@ -64,3 +64,23 @@ STDOUT
 [tool bash] {"command":"rm -rf denylist-sentinel"}
 [tool bash failed] Error: command denied: forced file removal is blocked
 STDERR
+
+expect_process "T3.7: the task tool delegates to a sub-agent and returns its result" 0 \
+    run_with_mock task-delegation env CODEX_HOME="$tool_home" PATH="$TEST_BIN_DIR:$PATH" \
+        microcodex Delegate an inventory task <<'STDOUT' 3<<'STDERR'
+Delegation complete
+STDOUT
+
+[tool task] {"task":"Count the files in the project.","description":"inventory"}
+[tool task completed] Sub-agent found 3 files
+STDERR
+
+expect_process "T3.8: the task tool rejects an empty task without spawning a sub-agent" 0 \
+    run_with_mock task-empty env CODEX_HOME="$tool_home" PATH="$TEST_BIN_DIR:$PATH" \
+        microcodex Delegate an empty task <<'STDOUT' 3<<'STDERR'
+Rejected empty task
+STDOUT
+
+[tool task] {"task":""}
+[tool task failed] Error: Argument 'task' must not be empty
+STDERR
